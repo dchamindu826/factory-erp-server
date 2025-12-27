@@ -47,7 +47,6 @@ const EmployeeSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// Update Attendance Schema with OT & Method
 const AttendanceSchema = new mongoose.Schema({
   employeeId: { type: String, required: true },
   fullName: String,
@@ -55,8 +54,8 @@ const AttendanceSchema = new mongoose.Schema({
   inTime: String,    // HH:mm
   outTime: String,   // HH:mm
   otHours: { type: Number, default: 0 },
-  status: { type: String, default: 'Present' }, // Present, Leave
-  method: { type: String, default: 'QR' },       // QR, Manual
+  status: { type: String, default: 'Present' },
+  method: { type: String, default: 'QR' },
   isHoliday: { type: Boolean, default: false },
   timestamp: { type: Date, default: Date.now }
 });
@@ -67,20 +66,17 @@ const Attendance = mongoose.models.Attendance || mongoose.model('Attendance', At
 // --- OT Calculation Helper ---
 const calculateOT = (date, inT, outT, isHoliday) => {
   if (!outT || !inT) return 0;
-  const day = new Date(date).getDay(); // 0-Sun, 6-Sat
+  const day = new Date(date).getDay();
   const [outH, outM] = outT.split(':').map(Number);
   const exitTimeDecimal = outH + outM / 60;
 
   let ot = 0;
   if (isHoliday || day === 0) {
-    // Sunday or Holiday (OT starts from 8:00 AM)
     const [inH, inM] = inT.split(':').map(Number);
     ot = exitTimeDecimal - (inH + inM / 60);
   } else if (day === 6) {
-    // Saturday (OT starts after 1:00 PM / 13:00)
     ot = exitTimeDecimal > 13 ? exitTimeDecimal - 13 : 0;
   } else {
-    // Weekdays (OT starts after 5:00 PM / 17:00)
     ot = exitTimeDecimal > 17 ? exitTimeDecimal - 17 : 0;
   }
   return ot > 0 ? parseFloat(ot.toFixed(2)) : 0;
@@ -88,7 +84,6 @@ const calculateOT = (date, inT, outT, isHoliday) => {
 
 // --- API Routes ---
 
-// 1. Get All Employees
 app.get('/api/employees', async (req, res) => {
   await connectDB();
   try {
@@ -97,7 +92,6 @@ app.get('/api/employees', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 2. Register New Employee
 app.post('/api/employees', async (req, res) => {
   await connectDB();
   try {
@@ -109,7 +103,6 @@ app.post('/api/employees', async (req, res) => {
   } catch (error) { res.status(500).json({ error: "Duplicate ID or Server Error" }); }
 });
 
-// 3. Update Employee
 app.put('/api/employees/:id', async (req, res) => {
   await connectDB();
   try {
@@ -123,7 +116,6 @@ app.put('/api/employees/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 4. Delete Employee
 app.delete('/api/employees/:id', async (req, res) => {
   await connectDB();
   try {
@@ -132,35 +124,35 @@ app.delete('/api/employees/:id', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 5. Attendance Mark (QR) with 8:30 Logic
+// GET Attendance (Fixes 404)
+app.get('/api/attendance', async (req, res) => {
+  await connectDB();
+  try {
+    const records = await Attendance.find().sort({ date: -1 });
+    res.json(records);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/attendance', async (req, res) => {
   await connectDB();
   try {
     const { employeeId } = req.body;
+    const employee = await Employee.findOne({ employeeId: { $regex: new RegExp(`^${employeeId.trim()}$`, 'i') } });
+    if (!employee) return res.status(404).json({ message: "Invalid QR" });
+
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
     const timeStr = now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0');
-    
-    const employee = await Employee.findOne({ employeeId });
-    if (!employee) return res.status(404).json({ message: "Invalid QR" });
-
-    // 8:30 logic (8.5 decimal)
     const isLate = (now.getHours() + now.getMinutes() / 60) > 8.5;
 
     const record = new Attendance({ 
-      employeeId: employee.employeeId, 
-      fullName: employee.fullName,
-      date: dateStr,
-      inTime: timeStr,
-      status: isLate ? 'Leave' : 'Present',
-      method: 'QR'
+      employeeId: employee.employeeId, fullName: employee.fullName, date: dateStr, inTime: timeStr, status: isLate ? 'Leave' : 'Present', method: 'QR'
     });
     await record.save();
-    res.status(201).json({ message: `Marked: ${employee.fullName} (${isLate ? 'Late/Leave' : 'Present'})` });
+    res.status(201).json({ message: `Marked: ${employee.fullName}`, employeeName: employee.fullName });
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 6. Manual Bulk Import (Excel)
 app.post('/api/attendance/bulk', async (req, res) => {
   await connectDB();
   try {
@@ -174,16 +166,6 @@ app.post('/api/attendance/bulk', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 7. Get All Attendance
-app.get('/api/attendance', async (req, res) => {
-  await connectDB();
-  try {
-    const records = await Attendance.find().sort({ date: -1 });
-    res.json(records);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// 8. Update Attendance Record (Manual Edit)
 app.put('/api/attendance/:id', async (req, res) => {
   await connectDB();
   try {
@@ -198,5 +180,4 @@ const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 }
-
 module.exports = app;
